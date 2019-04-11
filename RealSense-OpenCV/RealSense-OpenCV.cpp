@@ -9,6 +9,7 @@
 
 // 3rd party header for writing png files
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#define _CRT_SECURE_NO_WARNINGS
 #include "stb_image_write.h"
 #include "example.hpp"          // Include short list of convenience functions for rendering
 
