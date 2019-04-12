@@ -5,6 +5,9 @@
 #include <imgui.h>
 #include "imgui_impl_glfw.h"
 
+#include <algorithm>
+#include <iterator>
+
 #include <sstream>
 #include <fstream>
 #include <algorithm>
@@ -183,7 +186,7 @@ void remove_background( rs2::video_frame& other_frame, const rs2::depth_frame& d
 }
 
 void highlight_closest( rs2::video_frame& other_frame, const rs2::depth_frame& depth_frame, float depth_scale, float clipping_dist) {
-    const int slotSizeFactor = 8;
+    const int slotSizeFactor = 7;
     const int noOfSlots = 65536 >> slotSizeFactor;
     uint16_t slot_counts[noOfSlots];
 
@@ -194,9 +197,14 @@ void highlight_closest( rs2::video_frame& other_frame, const rs2::depth_frame& d
     const uint16_t* p_depth_frame = reinterpret_cast<const uint16_t*>(depth_frame.get_data());
     uint8_t* p_other_frame = reinterpret_cast<uint8_t*>(const_cast<void*>(other_frame.get_data()));
 
-    int width = other_frame.get_width();
-    int height = other_frame.get_height();
+    const int width = other_frame.get_width();
+    const int height = other_frame.get_height();
     int other_bpp = other_frame.get_bytes_per_pixel();
+    
+    uint8_t* p = new uint8_t[width*height*other_bpp];
+    uint8_t* p_copy_other_frame = p;
+
+    std::copy( p_other_frame, (p_other_frame + (width * height)), p_copy_other_frame );
 
     #pragma omp parallel for schedule(dynamic)  // Using OpenMP to try to parallelise the loop.
     // Make a pass through the image counting depth pixels.
@@ -255,8 +263,43 @@ void highlight_closest( rs2::video_frame& other_frame, const rs2::depth_frame& d
                 y_total += y;
                 //std::memset( &p_other_frame[offset], 0x00, other_bpp );
             }
+            else {
+                // Remove background
+                std::memset( &p_copy_other_frame[offset], 0x00, other_bpp );
+            }
         }
     }
+
+    #pragma omp parallel for schedule(dynamic)  // Using OpenMP to try to parallelise the loop.
+    for ( int y = 0; y < height; y++ ) {
+        auto depth_pixel_index = y * width;
+        uint8_t last_color = 0;
+        uint8_t new_color = 0;
+
+        for ( int x = 0; x < width; x++, ++depth_pixel_index ) {
+            // Calculate the offset in other frame's buffer to current pixel.
+            auto offset = depth_pixel_index * other_bpp;
+
+            // Find last pixel before void.
+            if ( p_copy_other_frame[depth_pixel_index] != 0x00 && p_copy_other_frame[depth_pixel_index + 1] == 0x00 ) {
+                last_color = offset;
+            }
+            // First pixel after void
+            else if ( p_copy_other_frame[depth_pixel_index] != 0x00 && p_copy_other_frame[depth_pixel_index - 1] == 0x00 ) {
+                new_color = offset;
+            }
+            // Fill void, if it exists.
+            if ( last_color != 0 && new_color != 0 ) {
+                for ( int i = last_color; i < new_color; i++ ) {
+                    std::memset( &p_copy_other_frame[i], p_other_frame[i], other_bpp );
+                }
+                last_color = 0;
+                new_color = 0;
+            }
+        }
+    }
+
+    std::copy( p_copy_other_frame, (p_copy_other_frame + (width * height)), p_other_frame );
 
     uint32_t x;
     uint32_t y;
